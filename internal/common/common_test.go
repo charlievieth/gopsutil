@@ -3,8 +3,10 @@ package common
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -46,6 +48,12 @@ func TestByteToString(t *testing.T) {
 	}
 
 	src = []byte{0, 65, 66, 67}
+	dst = ByteToString(src)
+	if dst != "ABC" {
+		t.Error("could not convert")
+	}
+
+	src = []byte{0, 65, 66, 67, 0}
 	dst = ByteToString(src)
 	if dst != "ABC" {
 		t.Error("could not convert")
@@ -159,4 +167,70 @@ func TestGetSysctrlEnv(t *testing.T) {
 	if !found {
 		t.Errorf("unexpected real result from getSysctrlEnv: %q", env)
 	}
+}
+
+func TestForEachLine(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "test.txt")
+	f, err := os.Create(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	for i := 0; i < 100; i++ {
+		if _, err := fmt.Fprintf(f, "%d\n", i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	doTest := func(t *testing.T, n int) {
+		seen := make(map[int]struct{})
+		err := ForEachLine(tmp, func(s string) error {
+			i, err := strconv.Atoi(s)
+			if err != nil {
+				return err
+			}
+			seen[i] = struct{}{}
+			if n >= 0 && len(seen) == n {
+				return ErrStopForEachLine
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n < 0 {
+			n = 100
+		}
+		if len(seen) != n {
+			t.Fatalf("len(seen) == %d; want: %d", len(seen), n)
+		}
+		for i := 0; i < n; i++ {
+			if _, ok := seen[i]; !ok {
+				t.Errorf("missing: %d", i)
+			}
+		}
+	}
+
+	t.Run("All", func(t *testing.T) {
+		doTest(t, -1)
+	})
+
+	t.Run("StopEarly", func(t *testing.T) {
+		for i := 1; i <= 5; i++ {
+			doTest(t, i)
+		}
+	})
+
+	t.Run("Invalid", func(t *testing.T) {
+		err := ForEachLine(tmp+".bad", func(s string) error {
+			panic("should not be called")
+		})
+		if !os.IsNotExist(err) {
+			t.Fatalf("Expected error: %s got: %v", os.ErrNotExist, err)
+		}
+	})
 }

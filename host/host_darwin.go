@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/shirou/gopsutil/v3/internal/common"
@@ -26,17 +27,11 @@ func HostIDWithContext(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, "IOPlatformUUID") {
-			parts := strings.SplitAfter(line, `" = "`)
-			if len(parts) == 2 {
-				uuid := strings.TrimRight(parts[1], `"`)
-				return strings.ToLower(uuid), nil
-			}
+	if _, line, ok := common.CutBytes(out, []byte(`"IOPlatformUUID" = "`)); ok {
+		if j := bytes.IndexByte(line, '"'); j >= 0 {
+			return string(line[:j]), nil
 		}
 	}
-
 	return "", errors.New("cannot find host id")
 }
 
@@ -49,7 +44,7 @@ func numProcs(ctx context.Context) (uint64, error) {
 }
 
 func UsersWithContext(ctx context.Context) ([]UserStat, error) {
-	utmpfile := "/var/run/utmpx"
+	const utmpfile = "/var/run/utmpx"
 	var ret []UserStat
 
 	file, err := os.Open(utmpfile)
@@ -64,7 +59,7 @@ func UsersWithContext(ctx context.Context) ([]UserStat, error) {
 	}
 
 	u := Utmpx{}
-	entrySize := int(unsafe.Sizeof(u))
+	const entrySize = int(unsafe.Sizeof(u))
 	count := len(buf) / entrySize
 
 	for i := 0; i < count; i++ {
@@ -91,19 +86,35 @@ func UsersWithContext(ctx context.Context) ([]UserStat, error) {
 	return ret, nil
 }
 
-func PlatformInformationWithContext(ctx context.Context) (string, string, string, error) {
-	platform := ""
-	family := ""
-	pver := ""
+var productVersion string
+var productVersionOnce sync.Once
 
+func loadProductVersion(ctx context.Context) string {
+	productVersionOnce.Do(func() {
+		out, err := invoke.CommandWithContext(ctx, "sw_vers", "-productVersion")
+		if err == nil {
+			productVersion = string(bytes.ToLower(bytes.TrimSpace(out)))
+		}
+	})
+	return productVersion
+}
+
+var platformInformation struct {
+	platform, family, pver string
+	err                    error
+	once                   sync.Once
+}
+
+func loadPlatformInformationOnce(ctx context.Context) {
+	info := &platformInformation
 	p, err := unix.Sysctl("kern.ostype")
 	if err == nil {
-		platform = strings.ToLower(p)
+		info.platform = strings.ToLower(p)
 	}
 
 	out, err := invoke.CommandWithContext(ctx, "sw_vers", "-productVersion")
 	if err == nil {
-		pver = strings.ToLower(strings.TrimSpace(string(out)))
+		info.pver = string(bytes.ToLower(bytes.TrimSpace(out)))
 	}
 
 	// check if the macos server version file exists
@@ -111,12 +122,18 @@ func PlatformInformationWithContext(ctx context.Context) (string, string, string
 
 	// server file doesn't exist
 	if os.IsNotExist(err) {
-		family = "Standalone Workstation"
+		info.family = "Standalone Workstation"
 	} else {
-		family = "Server"
+		info.family = "Server"
 	}
+}
 
-	return platform, family, pver, nil
+func PlatformInformationWithContext(ctx context.Context) (string, string, string, error) {
+	platformInformation.once.Do(func() {
+		loadPlatformInformationOnce(ctx)
+	})
+	return platformInformation.platform, platformInformation.family,
+		platformInformation.pver, platformInformation.err
 }
 
 func VirtualizationWithContext(ctx context.Context) (string, string, error) {

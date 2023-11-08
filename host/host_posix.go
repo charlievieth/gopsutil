@@ -3,8 +3,38 @@
 
 package host
 
-import "golang.org/x/sys/unix"
+import (
+	"sync"
 
+	"golang.org/x/sys/unix"
+)
+
+var cachedKernelArch = struct {
+	arch string
+	err  error
+	once sync.Once
+}{}
+
+// type responseCache[T any] struct {
+// 	res  T
+// 	err  error
+// 	once sync.Once
+// }
+
+func XKernelArch() (string, error) {
+	cachedKernelArch.once.Do(func() {
+		var utsname unix.Utsname
+		err := unix.Uname(&utsname)
+		if err != nil {
+			cachedKernelArch.err = err
+			return
+		}
+		cachedKernelArch.arch = unix.ByteSliceToString(utsname.Machine[:])
+	})
+	return cachedKernelArch.arch, cachedKernelArch.err
+}
+
+// TODO: cache this
 func KernelArch() (string, error) {
 	var utsname unix.Utsname
 	err := unix.Uname(&utsname)

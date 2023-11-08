@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// WARN: nothing uses this
 func DoSysctrlWithContext(ctx context.Context, mib string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, "sysctl", "-n", mib)
 	cmd.Env = getSysctrlEnv(os.Environ())
@@ -27,6 +28,7 @@ func DoSysctrlWithContext(ctx context.Context, mib string) ([]string, error) {
 	return values, nil
 }
 
+// WARN: nothing uses this
 func CallSyscall(mib []int32) ([]byte, uint64, error) {
 	miblen := uint64(len(mib))
 

@@ -80,6 +80,21 @@ func getTerminalMap() (map[uint64]string, error) {
 // https://github.com/python/cpython/blob/08ff4369afca84587b1c82034af4e9f64caddbf2/Lib/posixpath.py#L186-L216
 // https://docs.python.org/3/library/os.path.html#os.path.ismount
 func isMount(path string) bool {
+	// TODO: I think S_IFLNK might actually be portable here
+	// {
+	// 	var fi1, fi2 unix.Stat_t
+	// 	if err := unix.Lstat(path, &fi1); err != nil {
+	// 		return false
+	// 	}
+	// 	if fi1.Mode&unix.S_IFLNK != 0 {
+	// 		return false
+	// 	}
+	// 	if err := unix.Lstat(path+"/..", &fi2); err != nil {
+	// 		return false
+	// 	}
+	// 	return fi1.Dev != fi2.Dev || fi1.Ino != fi2.Ino
+	// }
+
 	// Check symlinkness with os.Lstat; unix.DT_LNK is not portable
 	fileInfo, err := os.Lstat(path)
 	if err != nil {
@@ -88,16 +103,12 @@ func isMount(path string) bool {
 	if fileInfo.Mode()&os.ModeSymlink != 0 {
 		return false
 	}
-	var stat1 unix.Stat_t
-	if err := unix.Lstat(path, &stat1); err != nil {
-		return false
-	}
-	parent := filepath.Join(path, "..")
 	var stat2 unix.Stat_t
-	if err := unix.Lstat(parent, &stat2); err != nil {
+	if err := unix.Lstat(path+"/..", &stat2); err != nil {
 		return false
 	}
-	return stat1.Dev != stat2.Dev || stat1.Ino == stat2.Ino
+	st := fileInfo.Sys().(*syscall.Stat_t)
+	return st.Dev != stat2.Dev || st.Ino == stat2.Ino
 }
 
 func PidExistsWithContext(ctx context.Context, pid int32) (bool, error) {

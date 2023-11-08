@@ -2,6 +2,7 @@ package common
 
 import "fmt"
 
+// WARN: not thread safe !!!
 type Warnings struct {
 	List    []error
 	Verbose bool

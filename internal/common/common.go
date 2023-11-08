@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/shirou/gopsutil/v3/internal/bpool"
 )
 
 var (
@@ -179,26 +181,11 @@ func UintToString(orig []uint8) string {
 }
 
 func ByteToString(orig []byte) string {
-	n := -1
-	l := -1
-	for i, b := range orig {
-		// skip left side null
-		if l == -1 && b == 0 {
-			continue
-		}
-		if l == -1 {
-			l = i
-		}
-
-		if b == 0 {
-			break
-		}
-		n = i + 1
+	orig = bytes.TrimLeft(orig, "\x00")
+	if i := bytes.IndexByte(orig, '\x00'); i >= 0 {
+		orig = orig[:i]
 	}
-	if n == -1 {
-		return string(orig)
-	}
-	return string(orig[l:n])
+	return string(orig)
 }
 
 // ReadInts reads contents from single line file and returns them as []int32.
@@ -332,11 +319,18 @@ func GetEnv(key string, dfault string, combineWith ...string) string {
 	case 0:
 		return value
 	case 1:
-		return filepath.Join(value, combineWith[0])
+		if filepath.Separator != '/' {
+			return filepath.Join(value, combineWith[0])
+		}
+		return filepath.Clean(strings.TrimSuffix(value, "/") + "/" +
+			strings.TrimPrefix(combineWith[0], "/"))
 	default:
 		all := make([]string, len(combineWith)+1)
-		all[0] = value
+		all[0] = strings.TrimSuffix(value, "/")
 		copy(all[1:], combineWith)
+		for i := 1; i < len(all); i++ {
+			all[i] = strings.Trim(all[i], "/")
+		}
 		return filepath.Join(all...)
 	}
 }
@@ -372,15 +366,50 @@ func HostRoot(combineWith ...string) string {
 // getSysctrlEnv sets LC_ALL=C in a list of env vars for use when running
 // sysctl commands (see DoSysctrl).
 func getSysctrlEnv(env []string) []string {
-	foundLC := false
 	for i, line := range env {
 		if strings.HasPrefix(line, "LC_ALL") {
 			env[i] = "LC_ALL=C"
-			foundLC = true
+			return env
 		}
 	}
-	if !foundLC {
-		env = append(env, "LC_ALL=C")
+	return append(env, "LC_ALL=C")
+}
+
+// SkipDir is used as a return value from the function passed to ForEachLine
+// to indicate that iteration should stop.
+var ErrStopForEachLine = errors.New("stop iterating file")
+
+// ForEachLine calls function fn for each line in filename. If fn return
+// returns ErrStopForEachLine the iteration is stopped.
+func ForEachLine(filename string, fn func(string) error) error {
+	f, err := os.Open(filename)
+	if err != nil {
+		return err
 	}
-	return env
+	r := bpool.GetReader(f)
+	defer func() {
+		f.Close()
+		bpool.PutReader(r)
+	}()
+	for {
+		line, e1 := r.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if len(line) > 0 {
+			if e2 := fn(line); e2 != nil {
+				if e1 == nil || e1 == io.EOF {
+					e1 = e2
+				}
+			}
+		}
+		if e1 != nil {
+			if e1 != io.EOF {
+				err = e1
+			}
+			break
+		}
+	}
+	if err == ErrStopForEachLine {
+		err = nil
+	}
+	return err
 }

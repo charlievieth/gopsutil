@@ -45,6 +45,15 @@ func Test_Pids(t *testing.T) {
 	if len(ret) == 0 {
 		t.Errorf("could not get pids %v", ret)
 	}
+
+	// Check for duplicates
+	seen := make(map[int32]bool, len(ret))
+	for _, pid := range ret {
+		if seen[pid] {
+			t.Error("duplicate pid:", pid)
+		}
+		seen[pid] = true
+	}
 }
 
 func Test_Pid_exists(t *testing.T) {
@@ -857,5 +866,38 @@ func BenchmarkProcessPpid(b *testing.B) {
 	p := testGetProcess()
 	for i := 0; i < b.N; i++ {
 		p.Ppid()
+	}
+}
+
+func BenchmarkPids(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, err := Pids()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcesses(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, err := Processes()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkChildren(b *testing.B) {
+	ppid := os.Getppid()
+	proc, err := NewProcess(int32(ppid))
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < b.N; i++ {
+		_, _ = proc.Children()
+		// _, err := Processes()
+		// if err != nil {
+		// 	b.Fatal(err)
+		// }
 	}
 }

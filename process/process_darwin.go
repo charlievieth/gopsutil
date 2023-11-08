@@ -41,15 +41,14 @@ type _Ctype_struct___0 struct {
 }
 
 func pidsWithContext(ctx context.Context) ([]int32, error) {
-	var ret []int32
-
 	kprocs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {
-		return ret, err
+		return nil, err
 	}
 
-	for _, proc := range kprocs {
-		ret = append(ret, int32(proc.Proc.P_pid))
+	ret := make([]int32, len(kprocs))
+	for i, proc := range kprocs {
+		ret[i] = int32(proc.Proc.P_pid)
 	}
 
 	return ret, nil
@@ -221,11 +220,11 @@ func convertCPUTimes(s string) (ret float64, err error) {
 	} else {
 		_tmp = s
 	}
-
-	_t := strings.Split(_tmp, ".")
 	if err != nil {
 		return ret, err
 	}
+	// WARN: this can panic if the string does not contain ":"
+	_t := strings.Split(_tmp, ".")
 	h, err := strconv.Atoi(_t[0])
 	t += h * clockTicks
 	h, err = strconv.Atoi(_t[1])
@@ -233,20 +232,111 @@ func convertCPUTimes(s string) (ret float64, err error) {
 	return float64(t) / float64(clockTicks), nil
 }
 
-func (p *Process) ChildrenWithContext(ctx context.Context) ([]*Process, error) {
-	pids, err := common.CallPgrepWithContext(ctx, invoke, p.Pid)
+// type ppidPair struct {
+// 	pid  int32
+// 	ppid int32
+// }
+
+func ppidMap(ctx context.Context) (map[int32]int32, error) {
+	pids, err := PidsWithContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	ret := make([]*Process, 0, len(pids))
+	m := make(map[int32]int32, len(pids))
 	for _, pid := range pids {
-		np, err := NewProcessWithContext(ctx, pid)
+		kp, err := unix.SysctlKinfoProc("kern.proc.pid", int(pid))
 		if err != nil {
-			return nil, err
+			continue
 		}
-		ret = append(ret, np)
+		m[pid] = kp.Eproc.Ppid
 	}
-	return ret, nil
+	return m, nil
+}
+
+// TODO: use for Ppid method
+func getppid(pid int32) (int32, error) {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", int(pid))
+	if err != nil {
+		return 0, err
+	}
+	return kp.Eproc.Ppid, nil
+}
+
+func (p *Process) ChildrenWithContext(ctx context.Context) ([]*Process, error) {
+	pids, err := PidsWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var children []*Process
+	for _, pid := range pids {
+		if pid == p.Pid {
+			continue
+		}
+		// TODO: simplify this
+		ppid, err := getppid(pid)
+		if err != nil {
+			continue
+		}
+		if ppid == p.Pid {
+			proc, err := NewProcessWithContext(ctx, pid)
+			if err != nil {
+				continue
+			}
+			children = append(children, proc)
+		}
+	}
+	return children, nil
+
+	// ppidmap, err := ppidMap(ctx)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// n := 0
+	// for _, ppid := range ppidmap {
+	// 	if ppid == p.Pid {
+	// 		n++
+	// 	}
+	// }
+	// if n == 0 {
+	// 	return nil, nil
+	// }
+	// children := make([]*Process, 0, n)
+	// for pid, ppid := range ppidmap {
+	// 	if ppid == p.Pid {
+	// 		proc, err := NewProcessWithContext(ctx, pid)
+	// 		if err != nil {
+	// 			continue
+	// 		}
+	// 		children = append(children, proc)
+	// 	}
+	// }
+	// return children, nil
+
+	// procs, err := ProcessesWithContext(ctx)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// var first error
+	// var children []*Process
+	// for _, pp := range procs {
+	// 	if pp.Pid == p.Pid {
+	// 		continue // skip self
+	// 	}
+	// 	ppid, err := pp.Ppid()
+	// 	if err != nil {
+	// 		if first == nil {
+	// 			first = err
+	// 		}
+	// 		continue
+	// 	}
+	// 	if ppid == p.Pid {
+	// 		children = append(children, pp)
+	// 	}
+	// }
+	// if len(children) != 0 {
+	// 	first = nil
+	// }
+	// return children, first
 }
 
 func (p *Process) ConnectionsWithContext(ctx context.Context) ([]net.ConnectionStat, error) {
@@ -258,13 +348,12 @@ func (p *Process) ConnectionsMaxWithContext(ctx context.Context, max int) ([]net
 }
 
 func ProcessesWithContext(ctx context.Context) ([]*Process, error) {
-	out := []*Process{}
-
 	pids, err := PidsWithContext(ctx)
 	if err != nil {
-		return out, err
+		return nil, err
 	}
 
+	out := make([]*Process, 0, len(pids))
 	for _, pid := range pids {
 		p, err := NewProcessWithContext(ctx, pid)
 		if err != nil {

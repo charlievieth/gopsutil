@@ -176,9 +176,15 @@ func Pids() ([]int32, error) {
 	return PidsWithContext(context.Background())
 }
 
+type int32Slice []int32
+
+func (x int32Slice) Len() int           { return len(x) }
+func (x int32Slice) Less(i, j int) bool { return x[i] < x[j] }
+func (x int32Slice) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+
 func PidsWithContext(ctx context.Context) ([]int32, error) {
 	pids, err := pidsWithContext(ctx)
-	sort.Slice(pids, func(i, j int) bool { return pids[i] < pids[j] })
+	sort.Sort(int32Slice(pids))
 	return pids, err
 }
 
@@ -249,7 +255,7 @@ func (p *Process) PercentWithContext(ctx context.Context, interval time.Duration
 			return 0, err
 		}
 		cpuTimes, err = p.TimesWithContext(ctx)
-		now = time.Now()
+		now = time.Now() // TODO: this can be located after the error check
 		if err != nil {
 			return 0, err
 		}
